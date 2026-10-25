@@ -1,7 +1,7 @@
 import{CLOUD_MODE,cloudAccess}from'./api';
 import{usePrivateAudio}from'./FamilyAccess';
 import React,{useEffect,useRef,useState} from 'react';import {View} from 'react-native';import {useAudioPlayer,useAudioPlayerStatus} from 'expo-audio';import {api,API,type Session} from './api';import {Button,Copy,C,styles} from './ui';import{PlaybackSpeed}from'./PlaybackSpeed';
-export function ListeningPlayer({sourcePath,session,busy,onEnd,onReplay,onPlayback,onPendingChange,hasFeedback,compact=false}:{sourcePath:string;compact?:boolean;session:Session;busy:boolean;onEnd:(isActive?:()=>boolean)=>Promise<void>;onReplay:(isActive?:()=>boolean)=>Promise<void>;onPlayback?:(session:Session)=>void;onPendingChange?:(pending:boolean)=>void;hasFeedback:boolean}){
+export function ListeningPlayer({sourcePath,session,busy,onEnd,onReplay,onPlayback,onPendingChange,onSaveError,hasFeedback,compact=false}:{sourcePath:string;compact?:boolean;session:Session;busy:boolean;onEnd:(isActive?:()=>boolean)=>Promise<void>;onReplay:(isActive?:()=>boolean)=>Promise<void>;onPlayback?:(session:Session)=>void;onPendingChange?:(pending:boolean)=>void;onSaveError?:()=>void;hasFeedback:boolean}){
  const privateAudio=usePrivateAudio(sourcePath);const player=useAudioPlayer(null,{updateInterval:150});
  useEffect(()=>{player.replace(privateAudio.source);},[player,privateAudio.source]);const status=useAudioPlayerStatus(player);
  useEffect(()=>{if(CLOUD_MODE&&status.error)void cloudAccess.response('/access',{}).catch(()=>{});},[status.error]);
@@ -11,15 +11,15 @@ export function ListeningPlayer({sourcePath,session,busy,onEnd,onReplay,onPlayba
  useEffect(()=>{onPendingChange?.(savingEnd||savingPlayback);},[savingEnd,savingPlayback,onPendingChange]);
  useEffect(()=>{if(status.error)setError(status.isLoaded?'音频暂时无法播放，请重试。':'音频载入失败。请检查本地服务后重新打开练习。');},[status.error]);
  useEffect(()=>{if(status.isLoaded){player.shouldCorrectPitch=true;player.setPlaybackRate(appliedRate.current,'high');}},[player,status.isLoaded]);
- async function recordHeard(r:number){if(!mounted.current)return;const s=await api<Session>('/sessions/'+session.id+'/playback',{rate:r,action:'play',voiceEpoch:session.voiceEpoch});if(mounted.current)onPlayback?.(s);}
+ async function recordHeard(r:number){const s=await api<Session>('/sessions/'+session.id+'/playback',{rate:r,action:'play',voiceEpoch:session.voiceEpoch});if(mounted.current)onPlayback?.(s);}
  useEffect(()=>{
   const r=appliedRate.current;
   if(started&&(status.playing||status.didJustFinish)&&status.currentTime>segmentStart.current+0.02&&!reported.current.has(r)){
-   reported.current.add(r);reports.current=reports.current.then(()=>recordHeard(r)).catch(()=>{failed.current.add(r);setError('播放记录待保存，请在听完后重试保存。');});
+   reported.current.add(r);reports.current=reports.current.then(()=>recordHeard(r)).catch(()=>{failed.current.add(r);onSaveError?.();setError('播放记录待保存，请在听完后重试保存。');});
   }
  },[started,status.currentTime,status.playing,status.didJustFinish,rate]);
- async function finish(){await reports.current;if(!mounted.current)return;for(const r of failed.current){await recordHeard(r);failed.current.delete(r);}if(mounted.current)await onEnd(()=>mounted.current);}
- useEffect(()=>{if(status.didJustFinish&&started&&!session.ended&&!endedSeen.current){endedSeen.current=true;setSavingEnd(true);void finish().catch(()=>{setError('听完记录未保存，请点“保存听完记录”重试。');}).finally(()=>setSavingEnd(false));}},[status.didJustFinish,started,session.ended,onEnd]);
+ async function finish(){await reports.current;for(const r of failed.current){await recordHeard(r);failed.current.delete(r);}await onEnd(()=>mounted.current);}
+ useEffect(()=>{if(status.didJustFinish&&started&&!session.ended&&!endedSeen.current){endedSeen.current=true;setSavingEnd(true);void finish().catch(()=>{onSaveError?.();setError('听完记录未保存，请点“保存听完记录”重试。');}).finally(()=>setSavingEnd(false));}},[status.didJustFinish,started,session.ended,onEnd]);
  const seconds=(n:number)=>Math.floor(n/60)+':'+Math.floor(n%60).toString().padStart(2,'0');
  function pending(value:boolean){playbackLock.current=value;setSavingPlayback(value);}
  async function selectRate(next:number){if(!mounted.current||next===rate||playbackLock.current)return;pending(true);setError('');try{

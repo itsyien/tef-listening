@@ -1,7 +1,7 @@
 {
   "name": "tef-listening-mobile",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "main": "expo-router/entry",
   "scripts": {
     "web": "expo start --web --localhost --port 8090 --max-workers 2",

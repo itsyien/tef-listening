@@ -10,19 +10,20 @@ const resultText=(a:Answer)=>a.result==='not-heard'?'没听清楚':a.correct?'�
 export default function App(){return <FamilyAccess><Home/></FamilyAccess>;}
 function Home(){
  const[settingsRevision,setSettingsRevision]=useState(0),currentQuestion=useRef<string|null>(null);
+ const sessionRead=useRef<AbortController|null>(null),syncRead=useRef<AbortController|null>(null),reviewRead=useRef<AbortController|null>(null),sessionRef=useRef<Session|null>(null),syncRevision=useRef(-1),[nextRevision,setNextRevision]=useState(0),ensured=useRef(new Set<string>());
  const {width}=useWindowDimensions(),wide=width>=1000;
  const [tab,setTab]=useState<'learn'|'review'|'settings'>('learn'),[catalog,setCatalog]=useState<{id:string;source:string}[]>([]),[ready,setReady]=useState(false),[mode,setMode]=useState('live'),[offline,setOffline]=useState(false),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const [session,setSession]=useState<Session|null>(null),[question,setQuestion]=useState<PublicQuestion|null>(null),[feedback,setFeedback]=useState<Feedback|null>(null),[choice,setChoice]=useState(''),[reviews,setReviews]=useState<Review[]>([]);
  const[reviewRun,setReviewRun]=useState<ReviewRun|null>(null),[reviewFilter,setReviewFilter]=useState<'all'|'wrong'|'not-heard'>('all'),[reviewFocus,setReviewFocus]=useState('');
  const reviewDone=!!reviewRun&&reviewRun.index>=reviewRun.roots.length,wrongReviews=reviews.filter(r=>r.category==='wrong'&&!r.resolved),visibleReviews=reviews.filter(r=>reviewFilter==='all'||r.category===reviewFilter);
  const [focusedChoice,setFocusedChoice]=useState(''),[focusedNav,setFocusedNav]=useState('');
- const assisted=session?.assisted??false;const[playbackPending,setPlaybackPending]=useState(false),[preferencesPending,setPreferencesPending]=useState(false);
+ const assisted=session?.assisted??false;const[playbackPending,setPlaybackPending]=useState(false);
  const[completed,setCompleted]=useState(false),[next,setNext]=useState<NextStatus|null>(null),[nextConnectionError,setNextConnectionError]=useState(false);
  const nextRequest=useRef(0),nextMutating=useRef(false);
- useEffect(()=>{if(!session||session.reviewMode){setNext(null);return;}let live=true,checking=false;nextRequest.current++;setNext(null);setNextConnectionError(false);
-  async function update(ensure=false){if(checking||nextMutating.current)return;checking=true;const version=nextRequest.current;try{const n=await api<NextStatus>('/sessions/'+session!.id+'/next',ensure?{}:undefined);if(live&&version===nextRequest.current){setNext(n);setNextConnectionError(false);}}catch{if(live&&version===nextRequest.current)setNextConnectionError(true);}finally{checking=false;}}
-  void update(true);const timer=setInterval(()=>void update(),2000);return()=>{live=false;clearInterval(timer);};
- },[session?.id]);
+ useEffect(()=>{if(!session||session.reviewMode){setNext(null);return;}let live=true,timer:ReturnType<typeof setTimeout>|undefined,failures=0;nextRequest.current++;setNextConnectionError(false);
+  async function update(){if(!live)return;if(nextMutating.current){timer=setTimeout(update,2000);return;}const version=nextRequest.current;try{const ensure=!ensured.current.has(session!.id);if(ensure)ensured.current.add(session!.id);const n=await api<NextStatus>('/sessions/'+session!.id+'/next',ensure?{}:undefined);if(live&&version===nextRequest.current){setNext(n);setNextConnectionError(false);failures=0;if(n.state==='preparing')timer=setTimeout(update,2000);}}catch{if(live&&version===nextRequest.current){setNextConnectionError(true);if(++failures<3)timer=setTimeout(update,5000);}}}
+  void update();return()=>{live=false;if(timer)clearTimeout(timer);};
+ },[session?.id,nextRevision]);
  const qualityRetry=!!next&&['retryable-quality','paused-quality','awaiting-content-review','awaiting-review'].includes(next.state);
  const legacyReview=next?.state==='awaiting-content-review'||next?.state==='awaiting-review';
  const nextNote=nextConnectionError?'暂时无法读取下一题进度，请检查学习服务连接。':next?.state==='preparing'?'正在提前准备下一题…':next?.state==='ready'?'下一题已准备好':qualityRetry?(legacyReview?'下一题可重新生成并自动检查':'下一题未通过质量检查，可重新生成'):next?.state==='paused-voice-budget'?'下一题声音预算需补充':next?.state==='paused-deepseek-budget'?'下一题文本预算已暂停':next?.state==='failed'?'下一题准备失败，可重试':next?.state==='waiting-approval'?'下一题等待授权':next?.state?.startsWith('paused')?'下一题准备已暂停，可查看原因':'';
@@ -30,42 +31,66 @@ function Home(){
  useEffect(()=>{if(!feedback)return;const frame=requestAnimationFrame(()=>content.current?.scrollTo({y:0,animated:false}));return()=>cancelAnimationFrame(frame);},[feedback]);
  const lock=useRef(false),pending=useRef<{choice:string;requestId:string}|null>(null);
  const loadSession=useCallback(async(id:string)=>{
-  let s=await api<Session>('/sessions/'+id);const preference=await api<{defaultVoice:Voice}>('/settings');if(preference.defaultVoice!==s.voice){await api('/sessions/'+id+'/voice',{voice:preference.defaultVoice});s=await api<Session>('/sessions/'+id);}setCompleted(false);setSession(s);setChoice('');setQuestion((s.ended||s.questionDisplay==='immediate')?await api('/sessions/'+id+'/question'):null);
-  if(s.ended){try{const data=await api<Feedback>('/sessions/'+id+'/feedback');setFeedback(!s.reviewMode||data.latest?.reviewMode||data.events.some(e=>e.kind==='reveal')?data:null);}catch{setFeedback(null);}}else setFeedback(null);
+  sessionRead.current?.abort();const controller=new AbortController();sessionRead.current=controller;const timer=setTimeout(()=>controller.abort(),12000),active=()=>!controller.signal.aborted&&sessionRead.current===controller;
+  try{
+   let [current,preference]=await Promise.all([api<Session>('/sessions/'+id,undefined,controller.signal),api<{defaultVoice:Voice}>('/settings',undefined,controller.signal)]);
+   if(!active())return;
+   if(sessionRef.current?.id===id&&sessionRef.current.voiceEpoch>current.voiceEpoch)return;
+   if(preference.defaultVoice!==current.voice){await api('/sessions/'+id+'/voice',{voice:preference.defaultVoice});if(!active())return;current=await api<Session>('/sessions/'+id,undefined,controller.signal);}
+   const [q,data]=await Promise.all([(current.ended||current.questionDisplay==='immediate')?api<PublicQuestion>('/sessions/'+id+'/question',undefined,controller.signal):null,current.ended?api<Feedback>('/sessions/'+id+'/feedback',undefined,controller.signal).catch(()=>null):null]);
+   if(!active()||(sessionRef.current?.id===id&&sessionRef.current.voiceEpoch>current.voiceEpoch))return;
+   const same=sessionRef.current?.id===id;
+   if(!same){setCompleted(false);setChoice('');}
+   setSession(old=>old?.id===id?{...current,ended:old.ended||current.ended,first:old.first??current.first,assisted:old.assisted||current.assisted}:current);
+   setQuestion(old=>q??(same&&sessionRef.current?.ended?old:null));
+   const visible=data&&(!current.reviewMode||data.latest?.reviewMode||data.events.some(e=>e.kind==='reveal'))?data:null;
+   setFeedback(old=>same&&old&&(!visible||(old.latest?.at??0)>(visible.latest?.at??0))?old:visible);
+  }catch(e){if(!controller.signal.aborted)throw e;}finally{clearTimeout(timer);}
  },[]);
- const resumeReview=useCallback(async(run:ReviewRun)=>{
-  setReviewRun(run);setSession(null);setQuestion(null);setFeedback(null);setChoice('');setCompleted(false);setTab('learn');pending.current=null;
+ const resumeReview=useCallback(async(run:ReviewRun,open=true)=>{
+  setReviewRun(run);setSession(null);setQuestion(null);setFeedback(null);setChoice('');setCompleted(false);if(open)setTab('learn');pending.current=null;
   await AsyncStorage.setItem(sessionStorageKey(REVIEW_STORAGE),JSON.stringify(run));
   if(run.index>=run.roots.length){setReviews(await api('/review'));return;}
   let childId=run.childId;
   if(!childId){const child=await api<Session>('/review/sessions',{sessionId:run.roots[run.index],requestId:(run.id+'-'+run.index+'-'+run.roots[run.index]).replace(/[^a-zA-Z0-9-]/g,'-').slice(0,100)});childId=child.id;run={...run,childId};await AsyncStorage.setItem(sessionStorageKey(REVIEW_STORAGE),JSON.stringify(run));setReviewRun(run);}
   await loadSession(childId);
  },[loadSession]);
- const sync=useCallback(async()=>{if(!CLOUD_MODE)return;const snapshot=await api<{revision:number;currentQuestionId:string|null;settings:unknown}>('/sync');currentQuestion.current=snapshot.currentQuestionId;const[list,review]=await Promise.all([api<{id:string;source:string}[]>('/catalog'),api<Review[]>('/review')]);setCatalog(list);setReviews(review);setSettingsRevision(v=>v+1);},[]);
- useEffect(()=>{if(!CLOUD_MODE)return;const listener=AppState.addEventListener('change',state=>{if(state==='active')void sync().catch(()=>setError('同步暂时失败，请稍后重试。'));});return()=>listener.remove();},[sync]);
+ const sync=useCallback(async()=>{if(!CLOUD_MODE)return;syncRead.current?.abort();const controller=new AbortController();syncRead.current=controller;const timer=setTimeout(()=>controller.abort(),12000);try{
+  const[snapshot,list,review]=await Promise.all([api<{revision:number;currentQuestionId:string|null;settings:unknown}>('/sync',undefined,controller.signal),api<{id:string;source:string}[]>('/catalog',undefined,controller.signal),api<Review[]>('/review',undefined,controller.signal)]);
+  if(controller.signal.aborted||syncRead.current!==controller||snapshot.revision<syncRevision.current)return;
+  syncRevision.current=snapshot.revision;currentQuestion.current=snapshot.currentQuestionId;setCatalog(list);setReviews(review);setError(old=>['同步暂时失败，请稍后重试。','同步暂时失败，当前记录保留。'].includes(old)?'':old);setSettingsRevision(v=>v+1);setNextRevision(v=>v+1);
+ }catch(e){if(!controller.signal.aborted)throw e;}finally{clearTimeout(timer);}},[]);
+ useEffect(()=>{if(!CLOUD_MODE)return;const reconnect=()=>void sync().catch(()=>setError('同步暂时失败，请稍后重试。'));const listener=AppState.addEventListener('change',state=>{if(state==='active')reconnect();});if(typeof window!=='undefined')window.addEventListener?.('online',reconnect);return()=>{listener.remove();if(typeof window!=='undefined')window.removeEventListener?.('online',reconnect);};},[sync]);
+ useEffect(()=>()=>{sessionRead.current?.abort();syncRead.current?.abort();reviewRead.current?.abort();},[]);
+ sessionRef.current=session;
+ function navigate(value:'learn'|'review'|'settings'){
+  sessionRead.current?.abort();reviewRead.current?.abort();setTab(value);
+  if(value==='learn'&&session)void loadSession(session.id).catch(()=>setError('同步暂时失败，当前记录保留。'));
+  if(value==='review'){const controller=new AbortController();reviewRead.current=controller;const timer=setTimeout(()=>controller.abort(),12000);void api<Review[]>('/review',undefined,controller.signal).then(rows=>{if(!controller.signal.aborted&&reviewRead.current===controller)setReviews(rows);}).catch(()=>{}).finally(()=>clearTimeout(timer));}
+ }
  const refresh=useCallback(async()=>{
   setOffline(false);setError('');try{
    if(CLOUD_MODE)await sync();
    const [health,list]=await Promise.all([api<{mode:string}>('/health'),api<{id:string;source:string}[]>('/catalog')]);setMode(health.mode);setCatalog(list);
-   const [saved,review]=await Promise.all([AsyncStorage.getItem(sessionStorageKey(STORAGE)),AsyncStorage.getItem(sessionStorageKey(REVIEW_STORAGE))]);try{if(review)await resumeReview(savedReview(review));else if(saved)await loadSession(saved);}catch(e){setError(e instanceof Error?e.message:'上次练习暂时无法恢复，请重试。原记录仍保留在学习服务中。');}
+   const [saved,review]=await Promise.all([AsyncStorage.getItem(sessionStorageKey(STORAGE)),AsyncStorage.getItem(sessionStorageKey(REVIEW_STORAGE))]);try{if(review)await resumeReview(savedReview(review),false);else if(saved)await loadSession(saved);}catch(e){setError(e instanceof Error?e.message:'上次练习暂时无法恢复，请重试。原记录仍保留在学习服务中。');}
    setReviews(await api('/review'));setReady(true);
   }catch{setOffline(true);setReady(true);}
  },[loadSession,resumeReview,sync]);
  useEffect(()=>{void refresh();},[refresh]);
  async function action(fn:()=>Promise<void>){if(lock.current)return;lock.current=true;setBusy(true);setError('');try{await fn();}catch(e){setError(e instanceof Error?e.message:'操作失败，请重试');}finally{lock.current=false;setBusy(false);}}
- const ended=useCallback(async(isActive?:()=>boolean)=>{if(!session||(isActive&&!isActive()))return;const s=await api<Session>('/sessions/'+session.id+'/events',{kind:'ended',voiceEpoch:session.voiceEpoch});if(isActive&&!isActive())return;const q=await api<PublicQuestion>('/sessions/'+s.id+'/question');if(isActive&&!isActive())return;setSession(s);setQuestion(q);},[session]);
+ const ended=useCallback(async(_isActive?:()=>boolean)=>{if(!session)return;const saved=await api<Session>('/sessions/'+session.id+'/events',{kind:'ended',voiceEpoch:session.voiceEpoch});const q=await api<PublicQuestion>('/sessions/'+saved.id+'/question');if(sessionRef.current?.id!==saved.id||sessionRef.current.voiceEpoch!==saved.voiceEpoch)return;setSession(old=>old?.id===saved.id?{...saved,first:old.first??saved.first}:old);setQuestion(q);setError(old=>old==='播放记录尚未保存，请返回听力重听并重试。'?'':old);},[session]);
  const replay=useCallback(async(isActive?:()=>boolean)=>{if(!session||(isActive&&!isActive()))return;const s=await api<Session>('/sessions/'+session.id+'/events',{kind:'replay',voiceEpoch:session.voiceEpoch});if(isActive&&!isActive())return;setSession(s);setFeedback(null);setChoice('');},[session]);
  async function submit(value:string){await action(async()=>{
   if(!session)return;if(!pending.current||pending.current.choice!==value)pending.current={choice:value,requestId:'answer-'+Date.now()+'-'+Math.random().toString(36).slice(2)};
   const data=await api<Feedback>('/sessions/'+session.id+'/answers',pending.current);pending.current=null;setFeedback(data);setSession({...session,first:data.first});setReviews(await api('/review'));
  });}
  async function reveal(){await action(async()=>{if(!session)return;setSession(await api<Session>('/sessions/'+session.id+'/events',{kind:'reveal'}));setFeedback(await api('/sessions/'+session.id+'/feedback'));});}
- async function requestNext(retry=false){if(!session||session.reviewMode)return;nextMutating.current=true;nextRequest.current++;try{const result=await api<NextStatus>('/sessions/'+session.id+'/next',retry?{retry:true}:{});setNext(result);setNextConnectionError(false);return result;}finally{nextMutating.current=false;}}
+ async function requestNext(retry=false){if(!session||session.reviewMode)return;nextMutating.current=true;nextRequest.current++;try{const result=await api<NextStatus>('/sessions/'+session.id+'/next',retry?{retry:true}:{});setNext(result);setNextConnectionError(false);if(result.state==='preparing')setNextRevision(v=>v+1);return result;}finally{nextMutating.current=false;}}
  async function continueLearning(){await action(async()=>{if(!session)return;if(session.reviewMode){if(reviewRun&&feedback?.latest?.reviewMode)await resumeReview({...reviewRun,index:reviewRun.index+1,childId:null});return;}const result=await requestNext();if(!result)return;if(result.state==='ready'&&result.questionId){const s=await api<Session>('/sessions',{questionId:result.questionId});await AsyncStorage.setItem(sessionStorageKey(STORAGE),s.id);await loadSession(s.id);}else setCompleted(true);});}
  async function startReview(roots:string[],kind:ReviewRun['kind']){if(!roots.length)return;await resumeReview({id:'review-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8),roots,index:0,childId:null,kind});}
- async function ordinaryPractice(){await AsyncStorage.removeItem(sessionStorageKey(REVIEW_STORAGE));setReviewRun(null);setSession(null);setQuestion(null);setFeedback(null);setCompleted(false);const saved=await AsyncStorage.getItem(sessionStorageKey(STORAGE));if(saved)await loadSession(saved);setTab('learn');}
- async function reviewList(){if(reviewDone){await AsyncStorage.removeItem(sessionStorageKey(REVIEW_STORAGE));setReviewRun(null);setSession(null);}setReviews(await api('/review'));setTab('review');}
- const nav=<View style={{gap:10,flexDirection:wide?'column':'row'}}>{(['learn','review','settings'] as const).map((value,i)=><Pressable key={value} aria-disabled={playbackPending||preferencesPending} disabled={playbackPending||preferencesPending} onFocus={()=>setFocusedNav(value)} onBlur={()=>setFocusedNav('')} accessibilityRole="button" accessibilityLabel={value==='learn'?'听力练习':value==='review'?'复习记录':'设置'} accessibilityState={{selected:tab===value}} onPress={()=>void action(async()=>{if(value==='learn'){if(session)await loadSession(session.id);else if(reviewRun&&!reviewDone)await resumeReview(reviewRun);else await ordinaryPractice();}setTab(value);})} style={({pressed})=>({outlineStyle:'solid',outlineWidth:focusedNav===value?3:0,outlineOffset:2,outlineColor:C.blue,flex:wide?undefined:1,flexDirection:'row',gap:wide?12:8,padding:wide?16:12,borderRadius:12,backgroundColor:tab===value?C.soft:'transparent',opacity:pressed?0.7:1})}>{wide&&<Copy style={{color:tab===value?C.blue:C.muted,fontSize:16}}>0{i+1}</Copy>}<Copy style={{fontSize:18,flexShrink:1,color:tab===value?C.blue:C.ink,fontWeight:tab===value?'700':'400'}}>{value==='learn'?'听力练习':value==='review'?'复习记录':'设置'}</Copy></Pressable>)}</View>;
+ async function ordinaryPractice(){setTab('learn');await AsyncStorage.removeItem(sessionStorageKey(REVIEW_STORAGE));setReviewRun(null);setSession(null);setQuestion(null);setFeedback(null);setCompleted(false);const saved=await AsyncStorage.getItem(sessionStorageKey(STORAGE));if(saved)await loadSession(saved);}
+ async function reviewList(){navigate('review');if(reviewDone){await AsyncStorage.removeItem(sessionStorageKey(REVIEW_STORAGE));setReviewRun(null);setSession(null);}}
+ const nav=<View style={{gap:10,flexDirection:wide?'column':'row'}}>{(['learn','review','settings'] as const).map((value,i)=><Pressable key={value} onFocus={()=>setFocusedNav(value)} onBlur={()=>setFocusedNav('')} accessibilityRole="button" accessibilityLabel={value==='learn'?'听力练习':value==='review'?'复习记录':'设置'} accessibilityState={{selected:tab===value}} onPress={()=>navigate(value)} style={({pressed})=>({outlineStyle:'solid',outlineWidth:focusedNav===value?3:0,outlineOffset:2,outlineColor:C.blue,flex:wide?undefined:1,flexDirection:'row',gap:wide?12:8,padding:wide?16:12,borderRadius:12,backgroundColor:tab===value?C.soft:'transparent',opacity:pressed?0.7:1})}>{wide&&<Copy style={{color:tab===value?C.blue:C.muted,fontSize:16}}>0{i+1}</Copy>}<Copy style={{fontSize:18,flexShrink:1,color:tab===value?C.blue:C.ink,fontWeight:tab===value?'700':'400'}}>{value==='learn'?'听力练习':value==='review'?'复习记录':'设置'}</Copy></Pressable>)}</View>;
  return <View style={{flex:1,backgroundColor:C.bg,flexDirection:'row'}}>
   {wide&&<View style={{width:260,backgroundColor:C.paper,borderRightWidth:1,borderColor:C.line,padding:28,paddingTop:44,gap:48}}><View><Copy style={{fontSize:28,fontWeight:'700',color:C.blue}}>TEF法语学习</Copy></View>{nav}</View>}
   <View style={{flex:1}}><ScrollView ref={content} style={{flex:1}} contentContainerStyle={{alignItems:'center',paddingHorizontal:wide?44:20,paddingTop:wide?44:26,paddingBottom:48}}>
@@ -75,7 +100,9 @@ function Home(){
     {__DEV__&&mode==='verification'&&<View style={{backgroundColor:C.soft,padding:14,borderRadius:10}}><Copy style={{color:C.blue,fontSize:17,fontWeight:'700'}}>本地验收会话 · 使用真实已保存音频</Copy></View>}
     {__DEV__&&mode==='test'&&<View style={{backgroundColor:'#FFF0D6',padding:14,borderRadius:10}}><Copy accessibilityRole="alert" style={{color:'#704815',fontSize:17,fontWeight:'700'}}>测试素材 · 非真实法语音频</Copy></View>}
     {!!error&&<View accessibilityRole="alert" style={[styles.card,{borderColor:C.error,padding:18}]}><Copy style={{color:C.error}}>{error}</Copy></View>}
-    {!ready?<View style={styles.card}><Copy>正在打开你的练习…</Copy></View>:offline?<View style={styles.card}><Copy style={styles.heading}>暂时无法连接学习服务</Copy><Copy style={styles.muted}>练习记录不会因此改变。服务恢复后，点下面的按钮再试一次。</Copy><Button title="重新连接" onPress={()=>void refresh()}/></View>:tab==='settings'?<SettingsPanel key={settingsRevision} onPendingChange={setPreferencesPending}/>:tab==='review'?<View style={{gap:16}}>
+ 
+    {ready&&!offline&&<View style={{display:tab==='settings'?'flex':'none'}} accessibilityElementsHidden={tab!=='settings'} importantForAccessibility={tab==='settings'?'auto':'no-hide-descendants'}><SettingsPanel revision={settingsRevision} active={tab==='settings'}/></View>}
+    {!ready?<View style={styles.card}><Copy>正在打开你的练习…</Copy></View>:offline?<View style={styles.card}><Copy style={styles.heading}>暂时无法连接学习服务</Copy><Copy style={styles.muted}>练习记录不会因此改变。服务恢复后，点下面的按钮再试一次。</Copy><Button title="重新连接" onPress={()=>void refresh()}/></View>:tab==='settings'?null:tab==='review'?<View style={{gap:16}}>
      <Button title="复习错题" disabled={busy||!wrongReviews.length} onPress={()=>void action(()=>startReview(wrongReviews.map(r=>r.sessionId),'wrong'))}/>
      {reviewRun&&!reviewDone&&<Button title="继续本轮复习" secondary disabled={busy} onPress={()=>void action(()=>resumeReview(reviewRun))}/>}
      <View accessibilityRole="radiogroup" accessibilityLabel="复习分类" style={{flexDirection:'row',gap:8,flexWrap:'wrap'}}>{(['all','wrong','not-heard'] as const).map((filter,i)=><Pressable key={filter} accessibilityRole="radio" accessibilityLabel={['全部','错题','没听清楚'][i]} accessibilityState={{checked:reviewFilter===filter}} aria-checked={reviewFilter===filter} onPress={()=>setReviewFilter(filter)} onFocus={()=>setReviewFocus(filter)} onBlur={()=>setReviewFocus('')} style={{minHeight:44,paddingVertical:8,paddingHorizontal:14,borderWidth:1,borderColor:reviewFilter===filter?C.blue:C.line,borderRadius:9,backgroundColor:reviewFilter===filter?C.soft:C.paper,outlineStyle:'solid',outlineWidth:reviewFocus===filter?2:0,outlineColor:C.blue,outlineOffset:2}}><Copy style={{fontSize:17,color:reviewFilter===filter?C.blue:C.ink}}>{['全部','错题','没听清楚'][i]}</Copy></Pressable>)}</View>
@@ -103,7 +130,7 @@ function Home(){
      {!session.reviewMode&&!feedback&&!!nextNote&&<Copy testID="next-prefetch-status" style={{fontSize:15,color:C.muted}}>{nextNote}</Copy>}
      {feedback&&<FeedbackPanel key={'feedback-'+session.id} feedback={feedback} sessionId={session.id}/>}
      {session.reviewMode&&<Copy style={styles.muted}>复习复用已保存的 {session.voice} 音频。</Copy>}
-     <PracticeVoice compact={!!feedback} key={session.id+':'+session.voice+':'+session.voiceEpoch} session={session} busy={busy} onEnd={ended} onReplay={replay} onPendingChange={setPlaybackPending} onPlayback={s=>{setSession(current=>current?.id===s.id&&current.voiceEpoch===s.voiceEpoch?{...s,ended:current.ended||s.ended,first:current.first??s.first}:current);}} hasFeedback={!!feedback}/>
+     <PracticeVoice compact={!!feedback} key={session.id+':'+session.voice+':'+session.voiceEpoch} session={session} busy={busy} onEnd={ended} onReplay={replay} onPendingChange={setPlaybackPending} onSaveError={()=>setError('播放记录尚未保存，请返回听力重听并重试。')} onPlayback={s=>{setSession(current=>current?.id===s.id&&current.voiceEpoch===s.voiceEpoch?{...s,ended:current.ended||s.ended,first:current.first??s.first}:current);}} hasFeedback={!!feedback}/>
 
      {question&&!feedback&&<View testID="question" style={styles.card}>
       {!session.ended&&<Copy style={{fontSize:16,color:C.muted}}>可先看题，听完后提交。</Copy>}

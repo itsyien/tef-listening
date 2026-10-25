@@ -7,9 +7,9 @@ export function createCloudAccess(base:string,storage:DeviceStorage,request:type
  function initialize(){return loaded??= (async()=>{deviceId=await storage.getItem(deviceKey)??'';if(!deviceId){deviceId=globalThis.crypto?.randomUUID?.()??'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,c=>{const n=Math.floor(Math.random()*16);return(c==='x'?n:(n&3)|8).toString(16);});await storage.setItem(deviceKey,deviceId);}code=await storage.getItem(credentialKey)??'';})();}
  function headers(){if(!base.startsWith('https://'))throw Error('云端服务必须使用 HTTPS。');if(!code||!deviceId)throw Error('请先输入私人访问码。');return {Authorization:'Bearer '+code,'X-TEF-Device':deviceId};}
  async function lock(){code='';notify();await storage.removeItem(credentialKey);}
- async function response(path:string,body?:unknown){
+ async function response(path:string,body?:unknown,signal?:AbortSignal){
   if(!path.startsWith('/')||path.startsWith('//')||path.includes('://'))throw Error('无效的服务路径。');
-  const result=await request(base+path,{method:body===undefined?'GET':'POST',headers:{...headers(),...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(12000)});
+  const result=await request(base+path,{method:body===undefined?'GET':'POST',headers:{...headers(),...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body),signal:signal??AbortSignal.timeout(12000)});
   if(result.status===401){await lock();throw Error('访问码无效或已更换，请重新输入。');}return result;
  }
  async function unlock(value:string){await initialize();const candidate=value.trim();if(!candidate)throw Error('请输入私人访问码。');

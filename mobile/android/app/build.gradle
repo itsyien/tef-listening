@@ -92,8 +92,8 @@ android {
         applicationId 'net.yienstudio.teflistening'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 2
+        versionName "0.1.1"
         externalNativeBuild {
             cmake {
                 // Ninja on Windows needs object paths below the legacy 260-character limit.

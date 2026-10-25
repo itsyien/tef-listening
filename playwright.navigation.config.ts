@@ -1,0 +1,1 @@
+import{defineConfig}from'@playwright/test';export default defineConfig({testDir:'./tests',testMatch:'navigation.spec.ts',workers:1,retries:0,timeout:45000,use:{channel:'msedge',headless:true,viewport:{width:1440,height:900}},reporter:'list'});

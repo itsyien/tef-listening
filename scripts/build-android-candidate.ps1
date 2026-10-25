@@ -2,6 +2,10 @@ param([switch]$FormalRelease)
 # Formal builds require the separately verified cloud acceptance gate.
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
+$app = (Get-Content -LiteralPath (Join-Path $projectRoot 'mobile\app.json') -Raw | ConvertFrom-Json).expo
+$appVersion = [string]$app.version
+$appVersionCode = [int]$app.android.versionCode
+if ($appVersion -notmatch '^\d+\.\d+\.\d+$' -or $appVersionCode -lt 1) { throw 'Explicit app version and Android versionCode are required.' }
 $acceptancePath = Join-Path $projectRoot 'release\cloud-acceptance.json'
 function Assert-CloudAcceptance {
     if (!(Test-Path -LiteralPath $acceptancePath) -or (Get-Content -LiteralPath $acceptancePath -Raw | ConvertFrom-Json).ready -ne $true) {
@@ -43,16 +47,19 @@ try {
     if (!$apkDigest -or $apkDigest -ne $keyDigest) { throw 'APK does not match the approved local release certificate.' }
     $badging = & (Join-Path $tools 'aapt.exe') dump badging $apk
     if ($LASTEXITCODE -ne 0 -or ($badging -match 'application-debuggable')) { throw 'APK release manifest verification failed.' }
+    $manifestText = $badging -join "`n"
+    if (!$manifestText.Contains("versionName='$appVersion'") -or !$manifestText.Contains("versionCode='$appVersionCode'")) { throw 'APK version does not match Expo release configuration.' }
     $output = Join-Path $projectRoot 'release\android'
     New-Item -ItemType Directory -Path $output -Force | Out-Null
     if ($FormalRelease) { Assert-CloudAcceptance }
-    $artifactName = if ($FormalRelease) { 'tef-listening-0.1.0.apk' } else { 'tef-listening-cloud-setup-required.apk' }
+    $artifactName = if ($FormalRelease) { "tef-listening-$appVersion.apk" } else { 'tef-listening-cloud-setup-required.apk' }
     $destination = Join-Path $output $artifactName
     Copy-Item -LiteralPath $apk -Destination $destination
     if ($FormalRelease) {
         [ordered]@{
             artifact = $artifactName
-            version = '0.1.0'
+            version = $appVersion
+            versionCode = $appVersionCode
             sha256 = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash.ToLowerInvariant()
             bytes = (Get-Item -LiteralPath $destination).Length
             certificateSha256 = $apkDigest.ToLowerInvariant()
@@ -62,7 +69,7 @@ try {
             cloudAcceptanceSha256 = (Get-FileHash -LiteralPath $acceptancePath -Algorithm SHA256).Hash.ToLowerInvariant()
             emulatorVerified = $false
             ready = $false
-        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'release.json') -Encoding utf8
+        } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output "release-$appVersion.json") -Encoding utf8
     }
 } finally {
     Remove-Item Env:TEF_ANDROID_STORE_PASSWORD -ErrorAction SilentlyContinue

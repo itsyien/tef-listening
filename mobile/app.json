@@ -2,7 +2,7 @@
   "expo": {
     "name": "TEF法语学习",
     "slug": "tef-listening",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "scheme": "teflistening",
     "userInterfaceStyle": "light",
     "web": {
@@ -29,7 +29,8 @@
         "foregroundImage": "./assets/adaptive-foreground.png",
         "monochromeImage": "./assets/adaptive-monochrome.png",
         "backgroundColor": "#2159B8"
-      }
+      },
+      "versionCode": 2
     },
     "ios": {
       "bundleIdentifier": "net.yienstudio.teflistening"

@@ -15,8 +15,8 @@ export interface Feedback{first:Answer|null;latest:Answer|null;question:Question
 export type PublicQuestion=Pick<Question,'id'|'version'|'question'>&{options:Pick<Question['options'][number],'id'|'text'>[]};
 export interface NextStatus{jobId:string|null;state:string;questionId:string|null;error:string|null}
 export interface Review{category:'wrong'|'not-heard'|'assisted';resolved:boolean;practiceCount:number;latestReview:Answer|null;titleZh:string;sessionId:string;questionId:string;first:Answer}
-export async function api<T>(path:string,body?:unknown):Promise<T>{
+export async function api<T>(path:string,body?:unknown,signal?:AbortSignal):Promise<T>{
  if(!API)throw Error('服务地址尚未配置，请先配置学习服务。');
- const response=CLOUD_MODE?await cloudAccess.response(path,body):await fetch(API+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:AbortSignal.timeout(12000)});
+ const response=CLOUD_MODE?await cloudAccess.response(path,body,signal):await fetch(API+path,{method:body===undefined?'GET':'POST',headers:body===undefined?{}:{'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body),signal:signal??AbortSignal.timeout(12000)});
  const value=await response.json();if(!response.ok)throw Error(value.error??'保存失败，请重试');return value;
 }
