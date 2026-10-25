@@ -1,0 +1,7 @@
+import type {CloudDoc} from './state.ts';
+import type {CloudRepository} from './repository.ts';
+export function providerTotals(doc:CloudDoc){const totals=structuredClone({deepseek:doc.budget.deepseek,tts:doc.budget.tts});for(const row of Object.values(doc.budget.reservations)){totals[row.provider].reserved+=row.cost;totals[row.provider].calls++;}for(const p of ['deepseek','tts'] as const)totals[p].reserved=Math.round(totals[p].reserved*1e6)/1e6;return totals;}
+export function cloudBudget(repo:CloudRepository){return {
+ async reserve(input:{key:string;provider:'deepseek'|'tts';cost:number}){if(!input.key||!['deepseek','tts'].includes(input.provider)||!Number.isFinite(input.cost)||input.cost<=0)throw Error('预算保留无效');await repo.update(doc=>{const old=doc.budget.reservations[input.key];if(old){if(old.provider!==input.provider||old.cost!==input.cost)throw Error('同一付费请求内容不同');return;}doc.budget.reservations[input.key]={provider:input.provider,cost:input.cost,settled:false};});return input.key;},
+ async settle(input:{key:string;reservationId:string;raw:unknown}){await repo.update(doc=>{const row=doc.budget.reservations[input.key];if(!row||input.reservationId!==input.key)throw Error('付费请求记录不匹配');if(row.settled)return;const raw=input.raw as any;row.settled=true;row.usage={requestId:typeof raw?.id==='string'?raw.id:typeof raw?.request_id==='string'?raw.request_id:null,usage:raw?.usage??null};});}
+};}

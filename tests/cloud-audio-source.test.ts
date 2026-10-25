@@ -1,0 +1,13 @@
+import{test}from'node:test';import assert from'node:assert/strict';import{readFileSync}from'node:fs';import{createRequire}from'node:module';import{runInNewContext}from'node:vm';import ts from'typescript';
+// Run the actual hook with a tiny effect scheduler; no React Native renderer or network is needed.
+function audioHook(cloud:boolean,platform:string){
+ const values:unknown[]=[],dependencies:unknown[][]=[],effects:(()=>unknown)[]=[];let index=0,changed=false;
+ const react={useState(initial:unknown){const slot=index++;if(!(slot in values))values[slot]=typeof initial==='function'?(initial as()=>unknown)():initial;return[values[slot],(value:unknown)=>{if(!Object.is(values[slot],value)){values[slot]=value;changed=true;}}];},useEffect(effect:()=>unknown,deps:unknown[]){const slot=index++;if(!dependencies[slot]||deps.some((value,i)=>!Object.is(value,dependencies[slot][i]))){dependencies[slot]=deps;effects.push(effect);}}};
+ const source=(path:string)=>cloud?{uri:'https://fixture.invalid'+path,headers:{Authorization:'Bearer fixture-only'}}:'http://fixture.invalid'+path;
+ const compiled=ts.transpileModule(readFileSync(new URL('../mobile/src/FamilyAccess.tsx',import.meta.url),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React}}).outputText;
+ const exports:Record<string,unknown>={};const nativeRequire=createRequire(import.meta.url);
+ runInNewContext(compiled,{exports,require:(name:string)=>name==='react'?react:name==='react-native'?{Platform:{OS:platform}}:name==='./api'?{CLOUD_MODE:cloud,audioSource:source}:name==='./ui'?{}:nativeRequire(name)});
+ const hook=exports.usePrivateAudio as(path:string)=>{source:unknown;error:string};
+ return{render(path:string){let result:{source:unknown;error:string};let turns=0;do{changed=false;index=0;result=hook(path);while(effects.length)effects.shift()!();assert.ok(++turns<8,'source update must settle without a render loop');}while(changed);return result!;},previousError(){values[1]='previous failed source';}};
+}
+for(const[cloud,platform]of[[false,'web'],[true,'android']]as const)test(`audio source follows path changes without remount (${cloud?'cloud native':'local web'})`,()=>{const hook=audioHook(cloud,platform);const first=hook.render('/audio/first.wav');hook.previousError();const second=hook.render('/audio/second.wav');assert.notDeepEqual(second.source,first.source);assert.equal(second.error,'');if(cloud){assert.deepEqual(JSON.parse(JSON.stringify(second.source)),{uri:'https://fixture.invalid/audio/second.wav',headers:{Authorization:'Bearer fixture-only'}});}else assert.equal(second.source,'http://fixture.invalid/audio/second.wav');});

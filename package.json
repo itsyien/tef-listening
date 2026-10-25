@@ -1,0 +1,21 @@
+{
+  "name": "tef-listening",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "mobile"
+  ],
+  "scripts": {
+    "test": "node --test tests/*.test.ts",
+    "api": "node --env-file-if-exists=server/.env server/http.ts",
+    "generate": "node --env-file-if-exists=server/.env server/generate.ts",
+    "web": "npm --workspace mobile run web",
+    "typecheck": "tsc --noEmit && npm --workspace mobile run typecheck",
+    "release:web": "node scripts/export-web-release.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "~6.0.3",
+    "@playwright/test": "^1.64.1"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "expo": {
+    "name": "TEF法语学习",
+    "slug": "tef-listening",
+    "version": "0.1.0",
+    "scheme": "teflistening",
+    "userInterfaceStyle": "light",
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-audio",
+        {
+          "recordAudioAndroid": false,
+          "microphonePermission": false,
+          "enableBackgroundPlayback": false,
+          "enableBackgroundRecording": false
+        }
+      ]
+    ],
+    "android": {
+      "package": "net.yienstudio.teflistening",
+      "icon": "./assets/icon.png",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-foreground.png",
+        "monochromeImage": "./assets/adaptive-monochrome.png",
+        "backgroundColor": "#2159B8"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "net.yienstudio.teflistening"
+    },
+    "icon": "./assets/icon.png"
+  }
+}

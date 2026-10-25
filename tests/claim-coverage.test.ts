@@ -1,0 +1,17 @@
+import{fixture}from'./fixture.ts';
+import{validateClaimCoverage}from'../server/claim-coverage.ts';
+test('content-complement que is one claim; genuine compound and relative markers still need segmentation',()=>{
+ const option='Pour informer que la réservation change de terrain.';
+ const script='Votre réservation est donc déplacée au terrain 3 à la même heure.';
+ const make=(text:string)=>({...fixture,script,correctOptionId:'A' as const,options:[{...fixture.options[0],text}]});
+ const coverage=(text:string)=>({fullySupported:true,unsupportedClaims:[],ambiguityNotes:[],clauses:[{text,supported:true,evidence:script,reasonZh:'这是仅用于测试的完整中文证据解释。'}]});
+ assert.equal(validateClaimCoverage(coverage(option),make(option) as any).fullySupported,true);
+ for(const text of ['Pour changer de terrain et confirmer la date.','Pour changer le terrain mais garder la date.','Pour fermer les terrains sauf le troisième.','Pour annoncer un changement permettant de jouer.','Pour annoncer un changement qui maintient la séance.','Pour changer de terrain afin de jouer.'])assert.throws(()=>validateClaimCoverage(coverage(text),make(text) as any));
+ assert.throws(()=>validateClaimCoverage({...coverage(option),unsupportedClaims:['added claim']},make(option) as any));
+ assert.throws(()=>validateClaimCoverage({...coverage(option),clauses:[{...coverage(option).clauses[0],evidence:'Nonexistent decisive evidence'}]},make(option) as any));
+});
+import{test}from'node:test';import assert from'node:assert/strict';
+const q={script:'Vous pouvez prendre un ticket au stand du marché et le montrer en sortant du parking.',question:'Comment obtenir le parking gratuit ?',correctOptionId:'A',options:[{id:'A',text:'Prendre un ticket au stand et le montrer à la sortie.'}]};
+test('claim coverage cannot omit an unsupported purpose clause or accept a decorative excerpt',async()=>{const{validateClaimCoverage,claimCoveragePrompt}=await import('../server/claim-coverage.ts');assert.equal(claimCoveragePrompt(q as any).includes('explanationZh'),false);const good={fullySupported:true,unsupportedClaims:[],ambiguityNotes:[],clauses:[{text:'Prendre un ticket au stand',supported:true,evidence:'prendre un ticket au stand du marché',reasonZh:'明确说明可以在市场摊位领取票据。'},{text:'et le montrer à la sortie.',supported:true,evidence:'le montrer en sortant du parking',reasonZh:'明确说明离开停车场时出示票据。'}]};assert.equal(validateClaimCoverage(good,q as any).fullySupported,true);assert.throws(()=>validateClaimCoverage({...good,clauses:[good.clauses[0]]},q as any));assert.throws(()=>validateClaimCoverage({...good,clauses:[{...good.clauses[0],text:q.options[0].text}]},q as any));assert.throws(()=>validateClaimCoverage({...good,clauses:[good.clauses[0],{...good.clauses[1],supported:false}]},q as any));});
+
+test('feedback evidence spans every validated clause rather than only the final request',async()=>{const{completeEvidence}=await import('../server/claim-coverage.ts');const script="Il travaille de nuit et dort mal. Il demande de commencer après neuf heures.";const q={...fixture,script};const coverage:any={fullySupported:true,unsupportedClaims:[],ambiguityNotes:[],clauses:[{text:'reason',supported:true,evidence:'Il travaille de nuit et dort mal.',reasonZh:'明确提供请求的原因'},{text:'request',supported:true,evidence:'Il demande de commencer après neuf heures.',reasonZh:'明确提供请求的内容'}]};assert.equal(completeEvidence(q,coverage),script);assert.equal(q.options[0].evidence,fixture.options[0].evidence);});

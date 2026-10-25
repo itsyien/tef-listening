@@ -1,0 +1,6 @@
+export function privateArtifacts(url:string,key:string,request:typeof fetch=fetch){
+ const path=(name:string)=>{if(!/^[a-zA-Z0-9/_-]+(?:\.wav)?$/.test(name)||name.includes('..'))throw Error('私有文件路径无效');return url+'/storage/v1/object/tef-private/'+name.split('/').map(encodeURIComponent).join('/');};
+ const headers={apikey:key,Authorization:'Bearer '+key};
+ async function get(name:string){const target=path(name).replace('/storage/v1/object/','/storage/v1/object/authenticated/');const r=await request(target,{headers,signal:AbortSignal.timeout(20000)});if(r.status===404)return null;if(!r.ok){if(r.status===400){const error=await r.json().catch(()=>null);if(String(error?.statusCode)==='404'&&error?.error==='not_found')return null;}throw Error('私有音频读取失败（'+r.status+'）');}return new Uint8Array(await r.arrayBuffer());}
+ return {get,async put(name:string,bytes:Uint8Array){const r=await request(path(name),{method:'POST',headers:{...headers,'Content-Type':name.endsWith('.wav')?'audio/wav':'application/octet-stream','x-upsert':'false'},body:bytes as Uint8Array<ArrayBuffer>,signal:AbortSignal.timeout(20000)});if(r.ok)return;const existing=await get(name);if(existing&&existing.length===bytes.length&&existing.every((v,i)=>v===bytes[i]))return;throw Error('私有文件保存失败，保留原文件，未重复调用供应商');}};
+}

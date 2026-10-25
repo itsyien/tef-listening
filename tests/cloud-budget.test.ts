@@ -1,0 +1,31 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {readFile} from 'node:fs/promises';
+import {CloudRepository} from '../server/cloud/repository.ts';
+import {initialCloudState} from '../server/cloud/state.ts';
+import {cloudBudget,providerTotals} from '../server/cloud/budget.ts';
+test('cloud ledger crosses former cumulative caps while preserving history and deduplicating calls',async()=>{
+ let body=initialCloudState(),revision=0;
+ body.budget.baselineAt='2026-10-24T22:19:00Z';
+ body.budget.deepseek={calls:67,reserved:19.95};body.budget.tts={calls:11,reserved:99.99};
+ const original=structuredClone(body.budget);
+ const repo=new CloudRepository({read:async()=>({body:structuredClone(body),revision}),cas:async(expected,value)=>{if(expected!==revision)return{committed:false,revision};body=structuredClone(value);return{committed:true,revision:++revision};}}),b=cloudBudget(repo);
+ await Promise.all([b.reserve({key:'one',provider:'deepseek',cost:.1}),b.reserve({key:'one',provider:'deepseek',cost:.1})]);
+ await b.reserve({key:'voice-one',provider:'tts',cost:.1});
+ assert.deepEqual(providerTotals(body),{deepseek:{calls:68,reserved:20.05},tts:{calls:12,reserved:100.09}});
+ await b.settle({key:'one',reservationId:'one',raw:{id:'test-request',usage:{total_tokens:123}}});
+ await b.settle({key:'one',reservationId:'one',raw:{id:'ignored-duplicate'}});
+ assert.equal(providerTotals(body).deepseek.reserved,20.05);
+ assert.deepEqual(body.budget.deepseek,original.deepseek);assert.deepEqual(body.budget.tts,original.tts);assert.equal(body.budget.baselineAt,original.baselineAt);
+ assert.deepEqual(body.budget.reservations.one!.usage,{requestId:'test-request',usage:{total_tokens:123}});
+ assert.equal(body.budget.reservations['voice-one']!.settled,false);
+ await assert.rejects(b.reserve({key:'one',provider:'tts',cost:.1}));
+ await assert.rejects(b.reserve({key:'one',provider:'deepseek',cost:.2}));
+ await assert.rejects(b.reserve({key:'invalid',provider:'tts',cost:0}));
+ assert.equal(Object.keys(body.budget.reservations).length,2);
+});
+test('cloud SQL preserves append-only history checks without former cumulative caps',async()=>{
+ const sql=await readFile(new URL('../server/cloud/schema.sql',import.meta.url),'utf8');
+ assert.doesNotMatch(sql,/Provider budget exceeded|numeric\s*>\s*(?:20|100)\b/);
+ assert.match(sql,/Historical costs are immutable/);assert.match(sql,/Reservations cannot be removed or reduced/);assert.match(sql,/Invalid reservation/);assert.match(sql,/First answers are immutable/);
+});
